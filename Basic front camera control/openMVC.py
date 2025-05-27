@@ -1,0 +1,197 @@
+#This file is for the openMV camer modules
+
+#importing libraires
+import cv2
+import numpy as np
+import sys, serial, struct,time # must install the serial lib
+
+#we are creating  the opencamera class.
+class openMVCamera() :
+
+    def __init__(self, name, com) :
+        self.name = name
+        self.picture = None
+        self.time = time.time()
+        self.frame = 0
+
+        self.display = True
+        self.fps = None
+        self.size = None
+
+        self.serial = serial.Serial(com, baudrate=115200, bytesize=serial.EIGHTBITS, parity=serial.PARITY_NONE,
+                                    xonxoff=False, rtscts=False, stopbits=serial.STOPBITS_ONE, timeout=None,
+                                    dsrdtr=True) 
+        
+        self.serial.setDTR(True)  # dsrdtr is ignored on Windows.
+        self.serial.write(b'wledd')
+        self.contrast = round(4/7,2)
+        self.brightness= round(4/7,2)
+        self.saturation= round(4/7,2)
+    
+    #for photos
+    def photos(self):
+        self.serial.write(b'photo')
+        size = struct.unpack('<L', self.serial.read(4))[0]
+        self.serial.flush()
+        self.picture = self.serial.read(size)
+        tic=time.time()
+        self.fps = 1 / (tic - self.time)
+        self.time = tic
+        self.frame = self.frame + 1
+        if self.display:
+            picture = cv2.imdecode(np.frombuffer(self.picture, np.uint8), -1)
+            picture = cv2.putText(picture, str(round(self.fps,1))+'fps',(0,15), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0),1)
+            cv2.imshow(self.name, picture)
+
+    #for videos
+    def videos(self):
+        while True:
+            self.photo()
+            keyCode = cv2.waitKey(1) & 0xff
+            # Stop the program on the ESC key
+            if keyCode == 27:
+                break
+
+        cv2.waitKey(0)
+        cv2.destroyAllWindows()
+
+    def format(self, size):
+        self.size = size
+        if size=='40x30':
+            self.serial.write(b'q4vga')
+        elif size=='80x60':
+            self.serial.write(b'q3vga')
+        elif size == '160x120':
+            self.serial.write(b'q2vga')
+        elif size == '320*240':
+            self.serial.write(b'q1vga')
+        elif size == '640x480':
+            self.serial.write(b'q0vga')
+        else:
+            print('photo format is not supported..')
+            self.size = b'ERROR'
+
+    def flip(self, vertical_or_horizontal):
+        if vertical_or_horizontal==b'verticle':
+            self.serial.write(b'hflip')
+
+    def seve(self, name) :
+        with open(name+'_'+str(self.frame)+'.jpg', 'wb+') as f:
+            f.write(self.picture)
+
+    def led(self, color):
+        self.serial.write(b'ledr0')
+        self.serial.write(b'ledg0')
+        self.serial.write(b'ledb0')
+        self.serial.write(b'ledi0')
+        if color == b'red' :
+            self.serial.write(b'ledr1')
+        elif color == b'green' :
+            self.serial.write(b'ledg1')
+        elif color == b'blue':
+            self.serial.write(b'ledb1')
+        elif color == b'pink':
+            self.serial.write(b'ledr1')
+            self.serial.write(b'ledb1')
+        elif color == b'cyan':
+            self.serial.write(b'ledg1')
+            self.serial.write(b'ledb1')
+        elif color == b'yellow':
+            self.serial.write(b'ledr1')
+            self.serial.write(b'ledg1')
+        elif color == b'white':
+            self.serial.write(b'ledr1')
+            self.serial.write(b'ledg1')
+            self.serial.write(b'ledb1')
+
+    def flash(self, color, time_ms) :
+        self.led(color)
+        time.sleep(time_ms/1000)
+        self.led(b'off')
+
+    def contrast(self, fraction) :
+        fraction = max(min(fraction,0),1)
+        current_code = round(self.contrast*7,0)
+        next_code = round(fraction*7,0)
+        while next_code>current_code:
+            self.serial.write(b'ctrt+')
+            current_code = current_code+1
+        while next_code < current_code:
+            self.serial.write(b'ctrt-')
+            current_code = current_code-1
+        self.contrast = round(current_code/7,2)
+
+    def brightness(self, fration) :
+        fraction = max(min(fraction,0),1)
+        current_code = round(self.brightness*7,0)
+        next_code = round(fraction*7,0)
+        while next_code > current_code:
+            self.serial.write(b'brgt+')
+            current_code = current_code+1
+        while next_code<current_code:
+            self.serial.write(b'brgt-')
+            current_code = current_code-1
+        self.brightness = round(current_code/7,2)
+
+    def saturation(self, fraction) :
+        fraction = max(min(fraction,0),1)
+        current_code = round(self.saturation*7,0)
+        next_code = round(fraction*7,0)
+        while next_code > current_code:
+            self.serial.write(b'satr+')
+            current_code = current_code+1
+        while next_code<current_code:
+            self.serial.write(b'satr-')
+            current_code = current_code-1
+        self.saturation = round(current_code/7,2)
+
+    def save_burst(self, name, count, period_ms) :
+        self.flash(b'yellow', 1000)
+        i=0
+        while i<count:
+            self.photo()
+            print('Do you want to save current picture? y/n')
+            keyCode = cv2.waitKey(period_ms) & 0xff
+            if keyCode==121:
+                self.flash(b'green',10)
+                self.save(name)
+                i = i + 1;
+                print('Picture saved')
+            elif keyCode ==110:
+                self.flash(b'red', 10)
+            elif keyCode == 27:
+                break
+            else:
+                self.flash(b'yellow', 10)
+                self.save(name)
+                print('<!> Time elapsed or Wrong key - Picture saved')
+                i = i + 1;
+        cv2.destroyAllWindows()
+        print('Done')
+        self.flash(b'green',1000)
+
+    def close(self) :
+        self.serial.write(b'wlede')
+        self.serial.close()
+
+if __name__ == '__main__':
+    camera1 = openMVCamera('CAMERA 1','/dev/ttyACM0')
+    camera1.save_burst('calibration',10,5000)
+    #camera1.led(b'green')
+    #time.sleep(1)
+    #camera1.flash(b'white',100)
+    #time.sleep(0.5)
+    #camera1.flash(b'white', 100)
+    #time.sleep(0.5)
+    #camera1.flash(b'white', 100)
+    #time.sleep(0.5)
+    #for i in range(100):
+    #    camera1.photo()
+    #    print(camera1.fps)
+    #camera1.video()
+    #camera1.save('my_picture')
+    camera1.close()
+
+
+
+
